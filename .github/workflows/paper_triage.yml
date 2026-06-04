@@ -1,0 +1,34 @@
+name: Paper triage report
+
+on:
+  workflow_dispatch:
+
+jobs:
+  paper-triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7.1.4
+
+      - name: Generate report
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          PAPER_TRIAGE_MODEL: ${{ secrets.PAPER_TRIAGE_MODEL }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: uv run python -m paper_triage.main --config config/paper_triage_config.yaml
+
+      - name: Upload report
+        uses: actions/upload-artifact@v7
+        with:
+          name: paper-triage-report
+          path: reports/*_paper_triage_report.docx
+          if-no-files-found: error
+
