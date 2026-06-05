@@ -39,6 +39,7 @@ class PaperAnalysis:
     minimal_experiment: str = ""
     reading_recommendation: str = "跳过"
     keyword_tags: list[str] = field(default_factory=list)
+    error_category: str | None = None
     error: str | None = None
 
 
@@ -50,6 +51,9 @@ class PaperAnalyzer:
         generation_kwargs: dict[str, Any] | None = None,
         research_directions: list[str] | None = None,
         judgment_criteria: list[str] | None = None,
+        provider: str = "OpenAI-compatible",
+        key_source: str = "unknown",
+        warnings: list[str] | None = None,
         client: Any | None = None,
     ) -> None:
         if not api_key and client is None:
@@ -61,22 +65,55 @@ class PaperAnalyzer:
         )
         self.research_directions = research_directions or []
         self.judgment_criteria = judgment_criteria or []
+        self.config_summary = {
+            "provider": provider,
+            "base_url": base_url or "https://api.openai.com/v1",
+            "model": self.generation_kwargs.get("model", "gpt-4o-mini"),
+            "key_source": key_source,
+            "warnings": warnings or [],
+        }
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "PaperAnalyzer":
         llm_config = config.get("llm", {})
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("SILICONFLOW_API_KEY") or llm_config.get("api_key", "")
+        siliconflow_key = os.getenv("SILICONFLOW_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if siliconflow_key:
+            api_key = siliconflow_key
+            key_source = "SILICONFLOW_API_KEY"
+            provider = "SiliconFlow"
+        elif openai_key:
+            api_key = openai_key
+            key_source = "OPENAI_API_KEY"
+            provider = "OpenAI-compatible"
+        else:
+            api_key = llm_config.get("api_key", "")
+            key_source = "config.llm.api_key"
+            provider = "OpenAI-compatible"
+
         base_url = os.getenv("OPENAI_API_BASE") or llm_config.get("api_base") or None
         model = os.getenv("PAPER_TRIAGE_MODEL")
         generation_kwargs = dict(llm_config.get("generation_kwargs", {}))
         if model:
             generation_kwargs["model"] = model
+        selected_model = generation_kwargs.get("model")
+        warnings = []
+        if base_url and "siliconflow" in base_url.lower():
+            provider = "SiliconFlow"
+            if not selected_model or selected_model == "gpt-4o-mini":
+                warnings.append(
+                    "SiliconFlow base URL is configured, but PAPER_TRIAGE_MODEL is empty or still gpt-4o-mini. "
+                    "Set PAPER_TRIAGE_MODEL to a SiliconFlow chat model."
+                )
         return cls(
             api_key=api_key,
             base_url=base_url,
             generation_kwargs=generation_kwargs,
             research_directions=list(config.get("research_directions", [])),
             judgment_criteria=list(config.get("judgment_criteria", [])),
+            provider=provider,
+            key_source=key_source,
+            warnings=warnings,
         )
 
     def analyze(self, papers: list[EmailPaper]) -> list[PaperAnalysis]:
@@ -100,11 +137,18 @@ class PaperAnalyzer:
                 ],
                 **self.generation_kwargs,
             )
-            content = response.choices[0].message.content or ""
+        except Exception as exc:
+            category = _classify_api_exception(exc)
+            logger.warning("Failed to call LLM for '{}': {}: {}", paper.title, category, exc)
+            return _fallback_analysis(paper, category, str(exc))
+
+        content = response.choices[0].message.content or ""
+        try:
             return _analysis_from_dict(json.loads(_extract_json(content)))
         except Exception as exc:
-            logger.warning("Failed to analyze paper '{}': {}", paper.title, exc)
-            return _fallback_analysis(paper, str(exc))
+            category = "JSON 解析失败"
+            logger.warning("Failed to parse LLM JSON for '{}': {}", paper.title, exc)
+            return _fallback_analysis(paper, category, f"{exc}; response preview: {content[:300]}")
 
     def _build_prompt(self, paper: EmailPaper) -> str:
         directions = "\n".join(f"- {item}" for item in self.research_directions)
@@ -177,8 +221,9 @@ def _analysis_from_dict(data: dict[str, Any]) -> PaperAnalysis:
     )
 
 
-def _fallback_analysis(paper: EmailPaper, error: str) -> PaperAnalysis:
+def _fallback_analysis(paper: EmailPaper, error_category: str, error: str) -> PaperAnalysis:
     abstract_preview = paper.abstract[:180] if paper.abstract else "邮件中未提供摘要或 TLDR。"
+    safe_error = _sanitize_error(error)
     return PaperAnalysis(
         relevance_score=0,
         matched_research_direction="待人工复核",
@@ -192,8 +237,31 @@ def _fallback_analysis(paper: EmailPaper, error: str) -> PaperAnalysis:
         minimal_experiment="待人工复核后再设计实验。",
         reading_recommendation="跳过",
         keyword_tags=["分析失败", "待复核"],
-        error=error,
+        error_category=error_category,
+        error=f"{error_category}: {safe_error}",
     )
+
+
+def _classify_api_exception(exc: Exception) -> str:
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    if any(marker in text for marker in ["401", "unauthorized", "authentication", "invalid api key", "api key"]):
+        return "认证失败"
+    if any(marker in text for marker in ["model_not_found", "model not found", "does not exist", "invalid model"]):
+        return "模型不存在"
+    if any(marker in text for marker in ["429", "rate limit", "too many requests"]):
+        return "请求限流"
+    if any(marker in text for marker in ["quota", "insufficient", "balance", "billing", "payment"]):
+        return "额度或余额不足"
+    if any(marker in text for marker in ["timeout", "connection", "network", "connecterror", "readtimeout"]):
+        return "网络错误"
+    return "LLM API 调用失败"
+
+
+def _sanitize_error(error: str) -> str:
+    text = str(error)
+    text = re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "sk-***", text)
+    text = re.sub(r"GOCSPX-[A-Za-z0-9_\-]+", "GOCSPX-***", text)
+    return text[:1000]
 
 
 def _clamp_score(value: Any) -> float:

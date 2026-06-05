@@ -33,3 +33,10 @@ llm:
 report:
   output_dir: reports
 
+email_report:
+  enabled: ${oc.env:PAPER_TRIAGE_SEND_EMAIL,false}
+  sender: ${oc.env:SENDER,null}
+  receiver: ${oc.env:RECEIVER,null}
+  sender_password: ${oc.env:SENDER_PASSWORD,null}
+  smtp_server: ${oc.env:SMTP_SERVER,smtp.qq.com}
+  smtp_port: ${oc.env:SMTP_PORT,465}
