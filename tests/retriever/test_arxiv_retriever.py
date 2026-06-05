@@ -25,6 +25,9 @@ def _make_arxiv_feed(paper_count: int):
                 "id": f"oai:arXiv.org:2601.{index:05d}v1",
                 "arxiv_announce_type": "new",
                 "title": f"Paper {index}",
+                "summary": f"arXiv:2601.{index:05d}v1 Announce Type: new\nAbstract: Abstract {index}",
+                "dc_creator": f"Author {index}",
+                "link": f"https://arxiv.org/abs/2601.{index:05d}v1",
             }
         )
         for index in range(paper_count)
@@ -155,7 +158,7 @@ def test_arxiv_retriever_retries_and_skips_failed_batch(config, monkeypatch):
     raw_papers = ArxivRetriever(config)._retrieve_raw_papers()
     failed_batch = tuple(entry.id.removeprefix("oai:arXiv.org:") for entry in feed.entries[5:10])
 
-    assert len(raw_papers) == 6
+    assert len(raw_papers) == 11
     assert batch_calls[failed_batch] == len(arxiv_retriever.ARXIV_RETRY_BACKOFF_SECONDS) + 1
     assert sleep_values == [
         arxiv_retriever.ARXIV_REQUEST_INTERVAL_SECONDS,
@@ -164,8 +167,36 @@ def test_arxiv_retriever_retries_and_skips_failed_batch(config, monkeypatch):
         arxiv_retriever.ARXIV_REQUEST_INTERVAL_SECONDS,
     ]
     assert any("arXiv API HTTP 503" in warning for warning in warnings)
-    assert any("Skipping arXiv batch 2/3" in warning for warning in warnings)
-    assert any("Fetched 6/11 arXiv papers" in warning for warning in warnings)
+    assert any("Falling back to RSS data for arXiv batch 2/3" in warning for warning in warnings)
+    assert raw_papers[5].summary == "Abstract 5"
+
+
+def test_arxiv_retriever_limits_feed_entries_from_output_count(config, monkeypatch):
+    config.executor.max_paper_num = 5
+    feed = _make_arxiv_feed(30)
+    requested_batches: list[list[str]] = []
+
+    class FakeSearch:
+        def __init__(self, id_list):
+            self.id_list = list(id_list)
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def results(self, search):
+            requested_batches.append(search.id_list)
+            return iter([SimpleNamespace(title=paper_id) for paper_id in search.id_list])
+
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _: feed)
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Search", FakeSearch)
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+
+    raw_papers = ArxivRetriever(config)._retrieve_raw_papers()
+
+    assert len(raw_papers) == 20
+    assert [len(batch) for batch in requested_batches] == [5, 5, 5, 5]
 
 
 def test_arxiv_retriever_handles_feed_without_title(config, monkeypatch):
@@ -188,7 +219,7 @@ def test_arxiv_retriever_handles_feed_without_title(config, monkeypatch):
 
 def test_run_with_hard_timeout_returns_value():
     result = _run_with_hard_timeout(
-        _sleep_and_return, ("done", 0.01), timeout=1, operation="test op", paper_title="paper"
+        _sleep_and_return, ("done", 0.01), timeout=5, operation="test op", paper_title="paper"
     )
     assert result == "done"
 
@@ -207,7 +238,7 @@ def test_run_with_hard_timeout_returns_none_on_failure(monkeypatch):
     warnings: list[str] = []
     monkeypatch.setattr(arxiv_retriever, "logger", SimpleNamespace(warning=warnings.append))
     result = _run_with_hard_timeout(
-        _raise_runtime_error, (), timeout=1, operation="test op", paper_title="paper"
+        _raise_runtime_error, (), timeout=5, operation="test op", paper_title="paper"
     )
     assert result is None
     assert "boom" in warnings[0]

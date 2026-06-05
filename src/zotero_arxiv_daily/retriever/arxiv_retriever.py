@@ -3,6 +3,7 @@ import arxiv
 from arxiv import Result as ArxivResult
 from ..protocol import Paper
 from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar
+from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 import feedparser
 from tqdm import tqdm
@@ -13,6 +14,7 @@ from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+import re
 
 T = TypeVar("T")
 
@@ -21,8 +23,27 @@ PDF_EXTRACT_TIMEOUT = 180
 TAR_EXTRACT_TIMEOUT = 180
 ARXIV_ID_BATCH_SIZE = 5
 ARXIV_REQUEST_INTERVAL_SECONDS = 4
-ARXIV_RETRY_BACKOFF_SECONDS = (60, 120, 240, 480, 600)
+ARXIV_RETRY_BACKOFF_SECONDS = (15, 30)
 ARXIV_RETRYABLE_HTTP_STATUSES = {429, 503}
+ARXIV_DEFAULT_FETCH_MULTIPLIER = 4
+
+
+@dataclass
+class _RssAuthor:
+    name: str
+
+
+@dataclass
+class _RssArxivPaper:
+    title: str
+    authors: list[_RssAuthor]
+    summary: str
+    pdf_url: str | None
+    entry_id: str
+    paper_id: str
+
+    def source_url(self) -> str:
+        return f"https://arxiv.org/e-print/{self.paper_id}"
 
 
 def _download_file(url: str, path: str) -> None:
@@ -100,6 +121,46 @@ def _get_http_status(exc: Exception) -> int | None:
     return None
 
 
+def _extract_arxiv_id(entry: Any) -> str:
+    return str(entry.id).removeprefix("oai:arXiv.org:")
+
+
+def _entry_link(entry: Any, paper_id: str) -> str:
+    link = entry.get("link") if hasattr(entry, "get") else None
+    if link:
+        return str(link)
+    return f"https://arxiv.org/abs/{paper_id}"
+
+
+def _clean_rss_summary(summary: str) -> str:
+    summary = re.sub(
+        r"^\s*arXiv:\S+\s+Announce Type:\s+\w+\s*Abstract:\s*",
+        "",
+        summary,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return summary.strip()
+
+
+def _rss_entry_to_paper(entry: Any) -> _RssArxivPaper:
+    paper_id = _extract_arxiv_id(entry)
+    title = str(entry.get("title", "") if hasattr(entry, "get") else getattr(entry, "title", ""))
+    summary = str(entry.get("summary", "") if hasattr(entry, "get") else getattr(entry, "summary", ""))
+    creators = ""
+    if hasattr(entry, "get"):
+        creators = entry.get("dc_creator") or entry.get("author") or ""
+    authors = [_RssAuthor(name.strip()) for name in str(creators).split(",") if name.strip()]
+    entry_id = _entry_link(entry, paper_id)
+    return _RssArxivPaper(
+        title=title.strip(),
+        authors=authors,
+        summary=_clean_rss_summary(summary),
+        pdf_url=f"https://arxiv.org/pdf/{paper_id}" if paper_id else None,
+        entry_id=entry_id,
+        paper_id=paper_id,
+    )
+
+
 def _extract_text_from_pdf_worker(pdf_url: str) -> str:
     with TemporaryDirectory() as temp_dir:
         path = os.path.join(temp_dir, "paper.pdf")
@@ -136,7 +197,17 @@ class ArxivRetriever(BaseRetriever):
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
 
-    def _retrieve_raw_papers(self) -> list[ArxivResult]:
+    def _get_max_feed_papers(self) -> int | None:
+        configured_limit = self.config.source.arxiv.get("max_fetch_papers")
+        if configured_limit is not None:
+            return int(configured_limit)
+
+        max_paper_num = self.config.executor.get("max_paper_num")
+        if max_paper_num is None:
+            return None
+        return int(max_paper_num) * ARXIV_DEFAULT_FETCH_MULTIPLIER
+
+    def _retrieve_raw_papers(self) -> list[ArxivResult | _RssArxivPaper]:
         client = arxiv.Client(num_retries=0, delay_seconds=ARXIV_REQUEST_INTERVAL_SECONDS)
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
@@ -146,9 +217,23 @@ class ArxivRetriever(BaseRetriever):
             raise Exception(f"Invalid ARXIV_QUERY: {query}.")
         raw_papers = []
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
+        feed_entries = [
+            entry
+            for entry in getattr(feed, "entries", []) or []
+            if entry.get("arxiv_announce_type", "new") in allowed_announce_types
+        ]
+        max_feed_papers = self._get_max_feed_papers()
+        if max_feed_papers is not None and len(feed_entries) > max_feed_papers:
+            logger.info(
+                f"Limiting arXiv RSS entries from {len(feed_entries)} to {max_feed_papers} "
+                f"before API enrichment"
+            )
+            feed_entries = feed_entries[:max_feed_papers]
+
+        fallback_by_id = {_extract_arxiv_id(entry): _rss_entry_to_paper(entry) for entry in feed_entries}
         all_paper_ids = [
-            i.id.removeprefix("oai:arXiv.org:")
-            for i in getattr(feed, "entries", []) or []
+            _extract_arxiv_id(i)
+            for i in feed_entries
             if i.get("arxiv_announce_type", "new") in allowed_announce_types
         ]
         if self.config.executor.debug:
@@ -191,15 +276,18 @@ class ArxivRetriever(BaseRetriever):
                         continue
 
                     logger.warning(
-                        f"Skipping arXiv batch {batch_index + 1}/{total_batches} after HTTP "
-                        f"{status or 'unknown'} error: {exc}"
+                        f"Falling back to RSS data for arXiv batch {batch_index + 1}/{total_batches} "
+                        f"after HTTP {status or 'unknown'} error: {exc}"
                     )
+                    raw_papers.extend(fallback_by_id[paper_id] for paper_id in batch_ids if paper_id in fallback_by_id)
                     bar.update(len(batch_ids))
                     break
                 except Exception as exc:
                     logger.warning(
-                        f"Skipping arXiv batch {batch_index + 1}/{total_batches} after unexpected error: {exc}"
+                        f"Falling back to RSS data for arXiv batch {batch_index + 1}/{total_batches} "
+                        f"after unexpected error: {exc}"
                     )
+                    raw_papers.extend(fallback_by_id[paper_id] for paper_id in batch_ids if paper_id in fallback_by_id)
                     bar.update(len(batch_ids))
                     break
         bar.close()
@@ -209,16 +297,19 @@ class ArxivRetriever(BaseRetriever):
 
         return raw_papers
 
-    def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
+    def convert_to_paper(self, raw_paper: ArxivResult | _RssArxivPaper) -> Paper:
         title = raw_paper.title
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
         pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
+        if isinstance(raw_paper, _RssArxivPaper):
+            full_text = None
+        else:
+            full_text = extract_text_from_tar(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_html(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_pdf(raw_paper)
         return Paper(
             source=self.name,
             title=title,
