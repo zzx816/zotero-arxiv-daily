@@ -7,9 +7,14 @@ from paper_triage.paper_analyzer import PaperAnalysis
 
 
 class FakeReader:
-    def fetch_latest_message(self, query):
+    def wait_for_message(self, query, expected_subject, attempts, interval_seconds, max_results):
+        self.query = query
+        self.expected_subject = expected_subject
+        self.attempts = attempts
+        self.interval_seconds = interval_seconds
+        self.max_results = max_results
         return SimpleNamespace(
-            subject="Daily arXiv",
+            subject=expected_subject,
             date="2026-06-05",
             html="<html></html>",
             plain="",
@@ -40,10 +45,16 @@ class FakeAnalyzer:
 
 def test_main_sends_report_email_when_enabled(monkeypatch, tmp_path):
     sent = {}
+    fake_reader = FakeReader()
     report_path = tmp_path / "2026-06-05_paper_triage_report.docx"
 
     monkeypatch.setattr(main_module, "_load_config", lambda path: {
-        "gmail": {"query": 'subject:"Daily arXiv"'},
+        "gmail": {
+            "query": 'subject:"Daily arXiv"',
+            "wait_attempts": 2,
+            "wait_interval_seconds": 3,
+            "max_results": 4,
+        },
         "papers": {"max_papers": 5},
         "report": {"output_dir": str(tmp_path)},
         "email_report": {
@@ -53,7 +64,7 @@ def test_main_sends_report_email_when_enabled(monkeypatch, tmp_path):
             "sender_password": "secret",
         },
     })
-    monkeypatch.setattr(main_module, "GmailReader", SimpleNamespace(from_env=lambda: FakeReader()))
+    monkeypatch.setattr(main_module, "GmailReader", SimpleNamespace(from_env=lambda: fake_reader))
     monkeypatch.setattr(main_module, "parse_arxiv_email", lambda body, max_papers: [
         EmailPaper("A title", "An abstract", "https://arxiv.org/abs/1")
     ])
@@ -61,6 +72,7 @@ def test_main_sends_report_email_when_enabled(monkeypatch, tmp_path):
 
     def fake_write_report(papers, analyses, output_dir, diagnostics=None, llm_diagnostics=None):
         report_path.write_bytes(b"fake docx")
+        sent["diagnostics"] = diagnostics
         sent["llm_diagnostics"] = llm_diagnostics
         return report_path
 
@@ -76,4 +88,10 @@ def test_main_sends_report_email_when_enabled(monkeypatch, tmp_path):
     assert sent["path"] == report_path
     assert sent["email_config"]["receiver"] == "receiver@example.com"
     assert sent["llm_diagnostics"]["provider"] == "SiliconFlow"
+    assert fake_reader.query == 'subject:"Daily arXiv"'
+    assert fake_reader.expected_subject.startswith("Daily arXiv ")
+    assert fake_reader.attempts == 2
+    assert fake_reader.interval_seconds == 3
+    assert fake_reader.max_results == 4
+    assert f"Expected Gmail subject: {fake_reader.expected_subject}" in sent["diagnostics"]
 

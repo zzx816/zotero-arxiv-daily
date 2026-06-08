@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -53,26 +54,68 @@ class GmailReader:
         )
 
     def fetch_latest_message(self, query: str) -> GmailMessage:
-        logger.info("Searching Gmail with query: {}", query)
+        return self.wait_for_message(
+            query=query,
+            expected_subject=None,
+            attempts=1,
+            interval_seconds=0,
+            max_results=1,
+        )
+
+    def wait_for_message(
+        self,
+        query: str,
+        expected_subject: str | None,
+        attempts: int = 12,
+        interval_seconds: int = 50,
+        max_results: int = 10,
+    ) -> GmailMessage:
+        attempts = max(1, attempts)
+        max_results = max(1, max_results)
+        expected = expected_subject.strip() if expected_subject else None
+        logger.info(
+            "Searching Gmail with query: {}; expected subject: {}",
+            query,
+            expected or "(latest message)",
+        )
+
+        for attempt in range(1, attempts + 1):
+            for message in self._fetch_candidate_messages(query, max_results=max_results):
+                if expected is None or message.subject.strip() == expected:
+                    logger.info("Loaded Gmail message {} with subject {}", message.message_id, message.subject)
+                    return message
+
+            if attempt < attempts:
+                logger.info(
+                    "Expected Gmail message not available yet (attempt {}/{}); waiting {} seconds",
+                    attempt,
+                    attempts,
+                    interval_seconds,
+                )
+                time.sleep(interval_seconds)
+
+        subject_detail = f" and subject: {expected}" if expected else ""
+        raise RuntimeError(f"No Gmail message matched query: {query}{subject_detail} after {attempts} attempts")
+
+    def _fetch_candidate_messages(self, query: str, max_results: int) -> list[GmailMessage]:
         listing = (
             self._service.users()
             .messages()
-            .list(userId="me", q=query, maxResults=1)
+            .list(userId="me", q=query, maxResults=max_results)
             .execute()
         )
         messages = listing.get("messages", [])
-        if not messages:
-            raise RuntimeError(f"No Gmail message matched query: {query}")
-
-        message_id = messages[0]["id"]
-        raw_message = (
-            self._service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
-        )
-        logger.info("Loaded Gmail message {}", message_id)
-        return _to_gmail_message(raw_message)
+        candidates = []
+        for message in messages:
+            message_id = message["id"]
+            raw_message = (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="full")
+                .execute()
+            )
+            candidates.append(_to_gmail_message(raw_message))
+        return candidates
 
 
 def _to_gmail_message(raw_message: dict[str, Any]) -> GmailMessage:

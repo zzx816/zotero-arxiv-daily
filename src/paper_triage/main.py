@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         reader = GmailReader.from_env()
-        message = reader.fetch_latest_message(config["gmail"]["query"])
+        gmail_config = config["gmail"]
+        expected_subject = _daily_arxiv_subject(date.today())
+        message = reader.wait_for_message(
+            query=gmail_config["query"],
+            expected_subject=expected_subject,
+            attempts=int(gmail_config.get("wait_attempts", 12)),
+            interval_seconds=int(gmail_config.get("wait_interval_seconds", 50)),
+            max_results=int(gmail_config.get("max_results", 10)),
+        )
     except Exception as exc:
         logger.error("Failed to read Gmail: {}", exc)
         return 1
@@ -34,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     max_papers = int(config.get("papers", {}).get("max_papers", 5))
     papers = parse_arxiv_email(email_body, max_papers=max_papers)
     diagnostics: list[str] = [
+        f"Expected Gmail subject: {expected_subject}",
         f"Gmail message: {message.subject or '(no subject)'}",
         f"Message date: {message.date or '(unknown)'}",
     ]
@@ -69,6 +79,10 @@ def _load_config(config_path: str) -> dict[str, Any]:
     if not isinstance(resolved, dict):
         raise TypeError("paper triage config must resolve to a mapping")
     return resolved
+
+
+def _daily_arxiv_subject(report_date: date) -> str:
+    return f"Daily arXiv {report_date:%Y/%m/%d}"
 
 
 def _configure_logging() -> None:
