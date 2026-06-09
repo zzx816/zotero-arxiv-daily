@@ -199,6 +199,68 @@ def test_arxiv_retriever_limits_feed_entries_from_output_count(config, monkeypat
     assert [len(batch) for batch in requested_batches] == [5, 5, 5, 5]
 
 
+def test_arxiv_retriever_filters_feed_entries_by_keywords(config, monkeypatch):
+    config.source.arxiv.include_keywords = ["few-shot", "sonar"]
+    config.source.arxiv.exclude_keywords = ["scaling law"]
+    feed = feedparser.FeedParserDict(
+        {
+            "feed": feedparser.FeedParserDict({"title": "cs.LG updates on arXiv.org"}),
+            "entries": [
+                feedparser.FeedParserDict(
+                    {
+                        "id": "oai:arXiv.org:2601.00001v1",
+                        "arxiv_announce_type": "new",
+                        "title": "Few-Shot Open-Set Recognition for Acoustic Targets",
+                        "summary": "Abstract: A transferable prototype method for target recognition.",
+                        "dc_creator": "Author 1",
+                    }
+                ),
+                feedparser.FeedParserDict(
+                    {
+                        "id": "oai:arXiv.org:2601.00002v1",
+                        "arxiv_announce_type": "new",
+                        "title": "Scaling Law for Large Language Models",
+                        "summary": "Abstract: A data scaling law for pretraining.",
+                        "dc_creator": "Author 2",
+                    }
+                ),
+                feedparser.FeedParserDict(
+                    {
+                        "id": "oai:arXiv.org:2601.00003v1",
+                        "arxiv_announce_type": "new",
+                        "title": "Sonar Domain Adaptation with Unknown Classes",
+                        "summary": "Abstract: A method for passive sonar classification.",
+                        "dc_creator": "Author 3",
+                    }
+                ),
+            ],
+        }
+    )
+    requested_batches: list[list[str]] = []
+
+    class FakeSearch:
+        def __init__(self, id_list):
+            self.id_list = list(id_list)
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def results(self, search):
+            requested_batches.append(search.id_list)
+            return iter([SimpleNamespace(title=paper_id) for paper_id in search.id_list])
+
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _: feed)
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Search", FakeSearch)
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+
+    raw_papers = ArxivRetriever(config)._retrieve_raw_papers()
+
+    assert len(raw_papers) == 2
+    assert requested_batches == [["2601.00001v1", "2601.00003v1"]]
+
+
 def test_arxiv_retriever_handles_feed_without_title(config, monkeypatch):
     feed = feedparser.FeedParserDict(
         {

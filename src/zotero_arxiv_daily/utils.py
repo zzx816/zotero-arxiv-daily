@@ -1,6 +1,7 @@
 import tarfile
 import re
 import glob
+import fnmatch
 import math
 import smtplib
 from collections import Counter
@@ -10,12 +11,6 @@ from email.utils import parseaddr, formataddr
 from loguru import logger
 import datetime
 from omegaconf import DictConfig
-import pymupdf
-import pymupdf.layout
-pymupdf.TOOLS.mupdf_display_errors(False)
-pymupdf.layout.activate()
-
-import pymupdf4llm  # noqa: E402
 
 _TOKEN_RE = re.compile(r'[a-zA-Z0-9]+')
 
@@ -133,10 +128,23 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
     return file_contents
 
 def extract_markdown_from_pdf(file_path:str) -> str:
+    import pymupdf
+    import pymupdf4llm
+
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    try:
+        import pymupdf.layout
+        pymupdf.layout.activate()
+    except Exception as exc:
+        logger.warning(f"PyMuPDF layout activation failed; using default PDF extraction: {exc}")
     return pymupdf4llm.to_markdown(file_path,use_ocr=False,header=False,footer=False,ignore_code=True)
 
 def glob_match(path:str, pattern:str) -> bool:
-    re_pattern = glob.translate(pattern,recursive=True)
+    translate = getattr(glob, "translate", fnmatch.translate)
+    if translate is fnmatch.translate:
+        re_pattern = translate(pattern)
+    else:
+        re_pattern = translate(pattern, recursive=True)
     return re.match(re_pattern, path) is not None
 
 def send_email(config:DictConfig, html:str):

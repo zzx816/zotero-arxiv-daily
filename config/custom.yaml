@@ -16,11 +16,60 @@ llm:
     base_url: ${oc.env:OPENAI_API_BASE}
   generation_kwargs:
     model: gpt-4o-mini
+  language: Chinese
 
 source:
   arxiv:
-    category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
+    category: ["eess.AS","cs.SD","eess.SP","cs.LG","cs.CV"]
+    include_cross_list: true
+    max_fetch_papers: 300
+    include_keywords:
+      - underwater
+      - sonar
+      - passive sonar
+      - acoustic target
+      - ship noise
+      - vessel
+      - marine
+      - hydrophone
+      - zero-shot
+      - zero shot
+      - few-shot
+      - few shot
+      - low-shot
+      - open-set
+      - open set
+      - open-world
+      - open world
+      - open-vocabulary
+      - open vocabulary
+      - generalized zero-shot
+      - GZSL
+      - OOD
+      - out-of-distribution
+      - unknown class
+      - novel class
+      - anomaly detection
+      - domain adaptation
+      - domain generalization
+      - transfer learning
+      - self-supervised
+      - contrastive learning
+      - prototype
+      - prototypical
+      - semantic embedding
+    exclude_keywords:
+      - scaling law
+      - data mixture
+      - repetition mismatch
+      - LLM router
+      - routing plateau
+      - language model routing
+      - instruction tuning
+      - chain-of-thought
+      - AI scientist
 
 executor:
   debug: ${oc.env:DEBUG,null}
   source: ['arxiv']
+  max_paper_num: 10

@@ -94,14 +94,33 @@ llm:
 
 source:
   arxiv:
-    category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
-    include_cross_list: false # Set to true to include arXiv cross-list papers in these categories.
+    category: ["eess.AS","cs.SD","eess.SP","cs.LG","cs.CV"]
+    include_cross_list: true # Set to true to include arXiv cross-list papers in these categories.
+    include_keywords:
+      - underwater
+      - sonar
+      - acoustic target
+      - ship noise
+      - zero-shot
+      - few-shot
+      - open-set
+      - open-vocabulary
+      - OOD
+      - domain adaptation
+      - transfer learning
+      - prototype
+    exclude_keywords:
+      - scaling law
+      - data mixture
+      - LLM router
+      - language model routing
 
 executor:
   debug: ${oc.env:DEBUG,null}
   source: ['arxiv']
 ```
 Set `source.arxiv.include_cross_list: true` if you want cross-listed papers included.
+Set `source.arxiv.include_keywords` / `source.arxiv.exclude_keywords` to keep broad categories useful without letting unrelated papers dominate the daily email.
 >[!NOTE]
 > `${oc.env:XXX,yyy}` means the value of the environment variable `XXX`. If the variable is not set, the default value `yyy` will be used.
 
@@ -116,6 +135,8 @@ source:
   arxiv:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
+    include_keywords: null # Optional title/abstract keywords. When set, papers must match at least one. Example: ["zero-shot","few-shot","open-set"]
+    exclude_keywords: null # Optional title/abstract keywords for dropping obvious mismatches. Example: ["scaling law","LLM router"]
   biorxiv:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:

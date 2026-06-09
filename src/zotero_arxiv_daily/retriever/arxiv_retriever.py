@@ -142,6 +142,29 @@ def _clean_rss_summary(summary: str) -> str:
     return summary.strip()
 
 
+def _keyword_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _entry_search_text(entry: Any) -> str:
+    title = str(entry.get("title", "") if hasattr(entry, "get") else getattr(entry, "title", ""))
+    summary = str(entry.get("summary", "") if hasattr(entry, "get") else getattr(entry, "summary", ""))
+    return f"{title}\n{_clean_rss_summary(summary)}".lower()
+
+
+def _entry_matches_keywords(entry: Any, include_keywords: list[str], exclude_keywords: list[str]) -> bool:
+    text = _entry_search_text(entry)
+    if include_keywords and not any(keyword.lower() in text for keyword in include_keywords):
+        return False
+    if exclude_keywords and any(keyword.lower() in text for keyword in exclude_keywords):
+        return False
+    return True
+
+
 def _rss_entry_to_paper(entry: Any) -> _RssArxivPaper:
     paper_id = _extract_arxiv_id(entry)
     title = str(entry.get("title", "") if hasattr(entry, "get") else getattr(entry, "title", ""))
@@ -217,11 +240,22 @@ class ArxivRetriever(BaseRetriever):
             raise Exception(f"Invalid ARXIV_QUERY: {query}.")
         raw_papers = []
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
+        include_keywords = _keyword_list(self.config.source.arxiv.get("include_keywords"))
+        exclude_keywords = _keyword_list(self.config.source.arxiv.get("exclude_keywords"))
         feed_entries = [
             entry
             for entry in getattr(feed, "entries", []) or []
             if entry.get("arxiv_announce_type", "new") in allowed_announce_types
         ]
+        if include_keywords or exclude_keywords:
+            before_keyword_filter = len(feed_entries)
+            feed_entries = [
+                entry for entry in feed_entries
+                if _entry_matches_keywords(entry, include_keywords, exclude_keywords)
+            ]
+            logger.info(
+                f"Filtered arXiv RSS entries by keywords from {before_keyword_filter} to {len(feed_entries)}"
+            )
         max_feed_papers = self._get_max_feed_papers()
         if max_feed_papers is not None and len(feed_entries) > max_feed_papers:
             logger.info(
