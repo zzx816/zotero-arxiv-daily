@@ -124,6 +124,31 @@ Set `source.arxiv.include_keywords` / `source.arxiv.exclude_keywords` to keep br
 >[!NOTE]
 > `${oc.env:XXX,yyy}` means the value of the environment variable `XXX`. If the variable is not set, the default value `yyy` will be used.
 
+## Save Word Reports Locally on Windows
+
+GitHub Actions cannot write directly to a local Windows folder. To keep a local copy of each Word report, run a scheduled task on the local machine that downloads the latest Gmail `.docx` attachment.
+
+Set these values as user environment variables, or put them in a local `.env` file that is not committed:
+
+```powershell
+GMAIL_CLIENT_ID=...
+GMAIL_CLIENT_SECRET=...
+GMAIL_REFRESH_TOKEN=...
+```
+
+Install the daily Windows scheduled task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-local-report-saver-task.ps1 -OutputDir "D:\Downloads\lunwen" -DailyAt "20:45"
+```
+
+Run once manually:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m paper_triage.report_attachment_saver --output-dir "D:\Downloads\lunwen"
+```
+
 Here is the full configuration, `???` means the value must be filled in:
 ```yaml
 zotero:
