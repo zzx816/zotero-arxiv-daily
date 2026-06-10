@@ -21,7 +21,7 @@ gmail:
   query: 'subject:"Daily arXiv"'
 
 papers:
-  max_papers: 5
+  max_papers: 10
 
 llm:
   api_base: ${oc.env:OPENAI_API_BASE,https://api.openai.com/v1}
