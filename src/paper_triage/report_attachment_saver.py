@@ -47,6 +47,7 @@ def save_report_attachments(
     )
     messages = listing.get("messages", [])
     saved: list[SavedAttachment] = []
+    processed_filenames: set[str] = set()
 
     for message_ref in messages:
         message_id = message_ref["id"]
@@ -59,6 +60,9 @@ def save_report_attachments(
         subject = _header(raw_message, "subject")
         for attachment in _docx_attachments(raw_message.get("payload", {})):
             filename = _safe_filename(attachment["filename"])
+            if filename in processed_filenames:
+                continue
+            processed_filenames.add(filename)
             target = output_path / filename
             if target.exists() and not overwrite:
                 saved.append(SavedAttachment(message_id, subject, filename, target, "exists"))
@@ -78,9 +82,6 @@ def save_report_attachments(
 
             target.write_bytes(_decode_base64url(data))
             saved.append(SavedAttachment(message_id, subject, filename, target, "saved"))
-
-        if saved:
-            break
 
     return saved
 

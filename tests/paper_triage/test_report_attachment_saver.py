@@ -99,6 +99,64 @@ def test_save_report_attachments_keeps_existing_file(tmp_path):
     assert existing.read_bytes() == b"existing"
 
 
+def test_save_report_attachments_continues_after_existing_latest_file(tmp_path):
+    existing = tmp_path / "2026-06-11_paper_triage_report.docx"
+    existing.write_bytes(b"existing")
+    reader = object.__new__(GmailReader)
+    reader._service = FakeService(
+        raw_messages={
+            "message-1": _raw_message(
+                "每日 arXiv 论文迁移可行性分析 2026-06-11",
+                existing.name,
+                "attachment-1",
+            ),
+            "message-2": _raw_message(
+                "每日 arXiv 论文迁移可行性分析 2026-06-10",
+                "2026-06-10_paper_triage_report.docx",
+                "attachment-2",
+            ),
+        },
+        attachments={
+            ("message-1", "attachment-1"): {"data": _encode(b"old-new")},
+            ("message-2", "attachment-2"): {"data": _encode(b"backfill")},
+        },
+    )
+
+    saved = save_report_attachments(output_dir=tmp_path, reader=reader)
+
+    assert [item.status for item in saved] == ["exists", "saved"]
+    assert existing.read_bytes() == b"existing"
+    assert (tmp_path / "2026-06-10_paper_triage_report.docx").read_bytes() == b"backfill"
+
+
+def test_save_report_attachments_reports_duplicate_filename_once(tmp_path):
+    reader = object.__new__(GmailReader)
+    reader._service = FakeService(
+        raw_messages={
+            "message-1": _raw_message(
+                "每日 arXiv 论文迁移可行性分析 2026-06-10",
+                "2026-06-10_paper_triage_report.docx",
+                "attachment-1",
+            ),
+            "message-2": _raw_message(
+                "每日 arXiv 论文迁移可行性分析 2026-06-10 rerun",
+                "2026-06-10_paper_triage_report.docx",
+                "attachment-2",
+            ),
+        },
+        attachments={
+            ("message-1", "attachment-1"): {"data": _encode(b"first")},
+            ("message-2", "attachment-2"): {"data": _encode(b"second")},
+        },
+    )
+
+    saved = save_report_attachments(output_dir=tmp_path, reader=reader)
+
+    assert len(saved) == 1
+    assert saved[0].filename == "2026-06-10_paper_triage_report.docx"
+    assert saved[0].path.read_bytes() == b"first"
+
+
 def _raw_message(subject, filename, attachment_id):
     return {
         "id": "message-1",
