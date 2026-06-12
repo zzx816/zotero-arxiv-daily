@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -28,13 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         reader = GmailReader.from_env()
         gmail_config = config["gmail"]
         expected_subject = _daily_arxiv_subject(date.today())
-        message = reader.wait_for_message(
-            query=gmail_config["query"],
-            expected_subject=expected_subject,
-            attempts=int(gmail_config.get("wait_attempts", 12)),
-            interval_seconds=int(gmail_config.get("wait_interval_seconds", 50)),
-            max_results=int(gmail_config.get("max_results", 10)),
-        )
+        message, used_subject_fallback = _load_daily_message(reader, gmail_config, expected_subject)
     except Exception as exc:
         logger.error("Failed to read Gmail: {}", exc)
         return 1
@@ -47,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         f"Gmail message: {message.subject or '(no subject)'}",
         f"Message date: {message.date or '(unknown)'}",
     ]
+    if used_subject_fallback:
+        diagnostics.append("Used fallback Gmail lookup after exact-subject wait timed out.")
 
     if not papers:
         diagnostics.append("未从邮件中解析到论文；请检查邮件 HTML 格式或 Gmail 查询条件。")
@@ -79,6 +75,67 @@ def _load_config(config_path: str) -> dict[str, Any]:
     if not isinstance(resolved, dict):
         raise TypeError("paper triage config must resolve to a mapping")
     return resolved
+
+
+def _load_daily_message(reader: GmailReader, gmail_config: dict[str, Any], expected_subject: str):
+    query = str(gmail_config["query"])
+    attempts = int(gmail_config.get("wait_attempts", 30))
+    interval_seconds = int(gmail_config.get("wait_interval_seconds", 60))
+    max_results = int(gmail_config.get("max_results", 10))
+    fallback_max_age_hours = int(gmail_config.get("fallback_max_age_hours", 36))
+
+    try:
+        return (
+            reader.wait_for_message(
+                query=query,
+                expected_subject=expected_subject,
+                attempts=attempts,
+                interval_seconds=interval_seconds,
+                max_results=max_results,
+            ),
+            False,
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "Exact Gmail subject {} not found after {} attempts; trying latest matching daily email fallback",
+            expected_subject,
+            attempts,
+        )
+        latest = reader.fetch_latest_message(query)
+        if not _is_recent_daily_message(latest.subject, latest.date, date.today(), fallback_max_age_hours):
+            raise RuntimeError(
+                f"{exc}; latest matching message was subject={latest.subject!r}, date={latest.date!r}"
+            ) from exc
+        return latest, True
+
+
+def _is_recent_daily_message(subject: str, message_date: str, report_date: date, max_age_hours: int) -> bool:
+    subject_date = _parse_subject_date(subject)
+    if subject_date is not None and subject_date not in {report_date, report_date - timedelta(days=1)}:
+        return False
+
+    if not message_date:
+        return subject.startswith("Daily arXiv ")
+
+    try:
+        timestamp = datetime.fromisoformat(message_date)
+    except ValueError:
+        return subject.startswith("Daily arXiv ")
+
+    age = datetime.now(timestamp.tzinfo) - timestamp
+    if age < timedelta(0):
+        age = timedelta(0)
+    return subject.startswith("Daily arXiv ") and age <= timedelta(hours=max_age_hours)
+
+
+def _parse_subject_date(subject: str) -> date | None:
+    prefix = "Daily arXiv "
+    if not subject.startswith(prefix):
+        return None
+    try:
+        return datetime.strptime(subject[len(prefix) :].strip(), "%Y/%m/%d").date()
+    except ValueError:
+        return None
 
 
 def _daily_arxiv_subject(report_date: date) -> str:

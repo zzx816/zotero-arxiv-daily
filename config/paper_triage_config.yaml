@@ -19,6 +19,10 @@ judgment_criteria:
 
 gmail:
   query: 'subject:"Daily arXiv"'
+  wait_attempts: 30
+  wait_interval_seconds: 60
+  max_results: 10
+  fallback_max_age_hours: 36
 
 papers:
   max_papers: 10
