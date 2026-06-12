@@ -14,7 +14,6 @@ from .email_sender import is_email_enabled, send_report_email
 from .gmail_reader import GmailReader
 from .paper_analyzer import PaperAnalyzer
 from .report_writer import write_report
-from .sender_mail_reader import SenderMailboxReader
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,16 +25,12 @@ def main(argv: list[str] | None = None) -> int:
     config = _load_config(args.config)
 
     try:
+        reader = GmailReader.from_env()
         gmail_config = config["gmail"]
-        email_config = config.get("email_report", {})
         expected_subject = _daily_arxiv_subject(date.today())
-        message, used_subject_fallback, message_source = _load_daily_message(
-            gmail_config,
-            email_config,
-            expected_subject,
-        )
+        message, used_subject_fallback = _load_daily_message(reader, gmail_config, expected_subject)
     except Exception as exc:
-        logger.error("Failed to read daily email source: {}", exc)
+        logger.error("Failed to read Gmail: {}", exc)
         return 1
 
     email_body = message.html or message.plain
@@ -45,7 +40,6 @@ def main(argv: list[str] | None = None) -> int:
         f"Expected Gmail subject: {expected_subject}",
         f"Gmail message: {message.subject or '(no subject)'}",
         f"Message date: {message.date or '(unknown)'}",
-        f"Message source: {message_source}",
     ]
     if used_subject_fallback:
         diagnostics.append("Used fallback Gmail lookup after exact-subject wait timed out.")
@@ -83,20 +77,7 @@ def _load_config(config_path: str) -> dict[str, Any]:
     return resolved
 
 
-def _load_daily_message(gmail_config: dict[str, Any], email_config: dict[str, Any], expected_subject: str):
-    try:
-        reader = GmailReader.from_env()
-        message, used_subject_fallback = _load_daily_message_from_gmail(reader, gmail_config, expected_subject)
-        return message, used_subject_fallback, "gmail"
-    except Exception as exc:
-        if not _should_try_sender_mail_fallback(exc):
-            raise
-        logger.warning("Gmail reader unavailable ({}); trying sender mailbox IMAP fallback", exc)
-        message = _load_daily_message_from_sender_mailbox(email_config, gmail_config, expected_subject)
-        return message, False, "sender-imap-fallback"
-
-
-def _load_daily_message_from_gmail(reader: GmailReader, gmail_config: dict[str, Any], expected_subject: str):
+def _load_daily_message(reader: GmailReader, gmail_config: dict[str, Any], expected_subject: str):
     query = str(gmail_config["query"])
     attempts = int(gmail_config.get("wait_attempts", 30))
     interval_seconds = int(gmail_config.get("wait_interval_seconds", 60))
@@ -128,22 +109,6 @@ def _load_daily_message_from_gmail(reader: GmailReader, gmail_config: dict[str, 
         return latest, True
 
 
-def _load_daily_message_from_sender_mailbox(
-    email_config: dict[str, Any],
-    gmail_config: dict[str, Any],
-    expected_subject: str,
-):
-    fallback_max_age_hours = int(gmail_config.get("fallback_max_age_hours", 36))
-    max_results = int(gmail_config.get("max_results", 10))
-    reader = SenderMailboxReader.from_config(email_config)
-    return reader.find_recent_daily_message(
-        expected_subject=expected_subject,
-        report_date=date.today(),
-        max_age_hours=fallback_max_age_hours,
-        max_messages=max_results * 3,
-    )
-
-
 def _is_recent_daily_message(subject: str, message_date: str, report_date: date, max_age_hours: int) -> bool:
     subject_date = _parse_subject_date(subject)
     if subject_date is not None and subject_date not in {report_date, report_date - timedelta(days=1)}:
@@ -161,20 +126,6 @@ def _is_recent_daily_message(subject: str, message_date: str, report_date: date,
     if age < timedelta(0):
         age = timedelta(0)
     return subject.startswith("Daily arXiv ") and age <= timedelta(hours=max_age_hours)
-
-
-def _should_try_sender_mail_fallback(exc: Exception) -> bool:
-    text = f"{exc.__class__.__name__}: {exc}".lower()
-    fallback_markers = [
-        "invalid_grant",
-        "token has been expired or revoked",
-        "token has been expired",
-        "revoked",
-        "gmail oauth is not configured",
-        "refresh token",
-        "unauthorized_client",
-    ]
-    return any(marker in text for marker in fallback_markers)
 
 
 def _parse_subject_date(subject: str) -> date | None:
