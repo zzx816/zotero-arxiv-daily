@@ -161,3 +161,61 @@ def test_recent_daily_message_accepts_recent_previous_day_subject():
         max_age_hours=36,
     )
 
+
+def test_main_falls_back_to_sender_mailbox_when_gmail_token_is_revoked(monkeypatch, tmp_path):
+    sent = {}
+    expected_subject = "Daily arXiv 2026/06/12"
+
+    class FakeSenderReader:
+        def find_recent_daily_message(self, expected_subject, report_date, max_age_hours, max_messages):
+            return SimpleNamespace(
+                subject=expected_subject,
+                date=(datetime.now().astimezone() - timedelta(minutes=2)).isoformat(),
+                html="<html></html>",
+                plain="",
+            )
+
+    report_path = tmp_path / "2026-06-12_paper_triage_report.docx"
+
+    monkeypatch.setattr(main_module, "_load_config", lambda path: {
+        "gmail": {
+            "query": 'subject:"Daily arXiv"',
+            "wait_attempts": 2,
+            "wait_interval_seconds": 3,
+            "max_results": 4,
+            "fallback_max_age_hours": 36,
+        },
+        "papers": {"max_papers": 5},
+        "report": {"output_dir": str(tmp_path)},
+        "email_report": {
+            "enabled": False,
+            "sender": "sender@qq.com",
+            "sender_password": "secret",
+            "smtp_server": "smtp.qq.com",
+        },
+    })
+    monkeypatch.setattr(
+        main_module,
+        "GmailReader",
+        SimpleNamespace(from_env=lambda: (_ for _ in ()).throw(RuntimeError("invalid_grant: token revoked"))),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "SenderMailboxReader",
+        SimpleNamespace(from_config=lambda config: FakeSenderReader()),
+    )
+    monkeypatch.setattr(main_module, "parse_arxiv_email", lambda body, max_papers: [
+        EmailPaper("A title", "An abstract", "https://arxiv.org/abs/1")
+    ])
+    monkeypatch.setattr(main_module, "PaperAnalyzer", SimpleNamespace(from_config=lambda config: FakeAnalyzer()))
+
+    def fake_write_report(papers, analyses, output_dir, diagnostics=None, llm_diagnostics=None):
+        report_path.write_bytes(b"fake docx")
+        sent["diagnostics"] = diagnostics
+        return report_path
+
+    monkeypatch.setattr(main_module, "write_report", fake_write_report)
+
+    assert main_module.main(["--config", "ignored.yaml"]) == 0
+    assert "Message source: sender-imap-fallback" in sent["diagnostics"]
+
