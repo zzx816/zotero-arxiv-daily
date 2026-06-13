@@ -39,7 +39,7 @@ jobs:
         run: uv run python -m paper_triage.main --config config/paper_triage_config.yaml
 
       - name: Upload report
-        if: always()
+        if: ${{ hashFiles('reports/*_paper_triage_report.docx') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: paper-triage-report

@@ -36,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
             max_results=int(gmail_config.get("max_results", 10)),
         )
     except Exception as exc:
+        if _is_missing_daily_email(exc):
+            logger.info("今天无邮件/无论文，跳过报告")
+            logger.info("No Daily arXiv email was found for today; skipping paper triage report")
+            return 0
         logger.error("Failed to read Gmail: {}", exc)
         return 1
 
@@ -83,6 +87,10 @@ def _load_config(config_path: str) -> dict[str, Any]:
 
 def _daily_arxiv_subject(report_date: date) -> str:
     return f"Daily arXiv {report_date:%Y/%m/%d}"
+
+
+def _is_missing_daily_email(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and "No Gmail message matched query" in str(exc)
 
 
 def _configure_logging() -> None:

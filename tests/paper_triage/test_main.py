@@ -95,3 +95,37 @@ def test_main_sends_report_email_when_enabled(monkeypatch, tmp_path):
     assert fake_reader.max_results == 4
     assert f"Expected Gmail subject: {fake_reader.expected_subject}" in sent["diagnostics"]
 
+
+def test_main_skips_successfully_when_daily_email_is_missing(monkeypatch, tmp_path):
+    called = {}
+
+    class MissingEmailReader:
+        def wait_for_message(self, query, expected_subject, attempts, interval_seconds, max_results):
+            raise RuntimeError(
+                f'No Gmail message matched query: {query} and subject: {expected_subject} after {attempts} attempts'
+            )
+
+    monkeypatch.setattr(main_module, "_load_config", lambda path: {
+        "gmail": {
+            "query": 'subject:"Daily arXiv"',
+            "wait_attempts": 2,
+            "wait_interval_seconds": 3,
+            "max_results": 4,
+        },
+        "papers": {"max_papers": 5},
+        "report": {"output_dir": str(tmp_path)},
+        "email_report": {
+            "enabled": True,
+            "sender": "sender@example.com",
+            "receiver": "receiver@example.com",
+            "sender_password": "secret",
+        },
+    })
+    monkeypatch.setattr(main_module, "GmailReader", SimpleNamespace(from_env=lambda: MissingEmailReader()))
+    monkeypatch.setattr(main_module, "parse_arxiv_email", lambda body, max_papers: called.setdefault("parse", True))
+    monkeypatch.setattr(main_module, "write_report", lambda *args, **kwargs: called.setdefault("write", True))
+    monkeypatch.setattr(main_module, "send_report_email", lambda *args, **kwargs: called.setdefault("send", True))
+
+    assert main_module.main(["--config", "ignored.yaml"]) == 0
+    assert called == {}
+
