@@ -25,28 +25,39 @@ class FakeClient:
 def test_analyzer_parses_json_response():
     content = """
     {
-      "relevance_score": 8.5,
-      "matched_research_direction": "开放集识别 OSR",
-      "core_contribution": "提出一种开放集原型方法。",
-      "method_type": "prototype learning",
+      "matched_research_direction": "广义零样本学习 GZSL",
+      "core_contribution": "提出一种生成式 GZSL 方法。",
+      "method_type": "generative GZSL",
       "technique_flags": {
         "zero-shot": false,
         "few-shot": true,
-        "GZSL": false,
-        "open-set": true,
-        "OOD": true,
-        "domain adaptation": false,
-        "semantic embedding": false,
+        "GZSL": true,
+        "semantic attribute embedding": true,
         "prototype learning": true,
-        "contrastive learning": false
+        "generative feature synthesis (GAN/VAE)": true,
+        "contrastive learning": false,
+        "self-supervised pretraining": false,
+        "domain adaptation": false,
+        "domain generalization": false,
+        "class imbalance / long-tail": false,
+        "metric learning": false,
+        "audio-text alignment (CLAP-like)": false,
+        "LLM-generated semantic attributes": false,
+        "incremental / continual learning": false,
+        "open-set or OOD detection (次要,非主线)": false
       },
-      "transferable_to_underwater": true,
-      "transfer_feasibility": "高",
-      "transferable_parts": "原型分类头和未知类阈值。",
+      "zsl_fsl_score": 9,
+      "method_transfer_score": 8,
+      "acoustic_modality_score": 6,
+      "novelty_score": 8,
+      "experiment_feasibility_score": 7,
+      "risk_score": 2,
+      "score_rationale": "GZSL 机制和生成式特征合成都有迁移价值。",
+      "transferable_parts": "生成式特征合成和语义嵌入桥接。",
       "hard_to_transfer_parts": "视觉增强策略。",
-      "minimal_experiment": "在 DeepShip 上用 Log-Mel 特征训练原型网络。",
-      "reading_recommendation": "精读",
-      "keyword_tags": ["OSR", "prototype", "few-shot"]
+      "minimal_experiment": "在 DeepShip 上构造 seen/unseen 划分并用 Log-Mel 特征验证。",
+      "inspiration_note": "可以借鉴语义嵌入到特征生成的桥接方式。",
+      "keyword_tags": ["GZSL", "prototype", "few-shot"]
     }
     """
     analyzer = PaperAnalyzer(
@@ -57,10 +68,13 @@ def test_analyzer_parses_json_response():
 
     analysis = analyzer.analyze_one(EmailPaper("A title", "An abstract", "https://arxiv.org/abs/1"))
 
-    assert analysis.relevance_score == 8.5
+    assert analysis.relevance_score == 8.0
     assert analysis.transfer_feasibility == "高"
     assert analysis.reading_recommendation == "精读"
-    assert analysis.technique_flags["open-set"] is True
+    assert analysis.technique_flags["GZSL"] is True
+    assert analysis.zsl_fsl_score == 9
+    assert analysis.method_transfer_score == 8
+    assert analysis.inspiration_note == "可以借鉴语义嵌入到特征生成的桥接方式。"
 
 
 def test_analyzer_falls_back_on_invalid_json():
