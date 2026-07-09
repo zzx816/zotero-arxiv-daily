@@ -15,6 +15,14 @@ from loguru import logger
 from .arxiv_email_parser import EmailPaper
 from .paper_analyzer import PaperAnalysis
 
+_SUB_SCORE_FIELDS = [
+    ("zsl_fsl_score", "ZSL/FSL相关度"),
+    ("method_transfer_score", "方法可迁移性"),
+    ("acoustic_modality_score", "声学模态匹配度"),
+    ("novelty_score", "新颖度/灵感值"),
+    ("experiment_feasibility_score", "实验可行性"),
+]
+
 
 def write_report(
     papers: list[EmailPaper],
@@ -28,6 +36,10 @@ def write_report(
     output_path = Path(output_dir) / f"{report_date:%Y-%m-%d}_paper_triage_report.docx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 高分论文排在最前面,后续所有板块(快速筛选表、详细分析、清单)都复用这个顺序,
+    # 保证"打开报告先看到最相关的论文"。
+    papers, analyses = _sort_by_relevance(papers, analyses)
+
     document = Document()
     _set_default_font(document)
     _set_landscape_layout(document)
@@ -35,6 +47,7 @@ def write_report(
 
     _add_overview(document, papers, analyses, report_date, diagnostics or [], llm_diagnostics or {})
     _add_quick_table(document, papers, analyses)
+    _add_inspiration_list(document, papers, analyses)
     _add_details(document, papers, analyses)
     _add_reading_list(document, "今日精读清单", papers, analyses, "精读")
     _add_reading_list(document, "今日略读清单", papers, analyses, "略读")
@@ -45,6 +58,16 @@ def write_report(
     document.save(output_path)
     logger.info("Wrote paper triage report to {}", output_path)
     return output_path
+
+
+def _sort_by_relevance(
+    papers: list[EmailPaper], analyses: list[PaperAnalysis]
+) -> tuple[list[EmailPaper], list[PaperAnalysis]]:
+    if not papers:
+        return papers, analyses
+    paired = sorted(zip(papers, analyses), key=lambda item: item[1].relevance_score, reverse=True)
+    sorted_papers, sorted_analyses = zip(*paired)
+    return list(sorted_papers), list(sorted_analyses)
 
 
 def _set_default_font(document: Document) -> None:
@@ -79,6 +102,15 @@ def _add_overview(
         f"阅读建议统计：精读 {counts.get('精读', 0)} 篇，"
         f"略读 {counts.get('略读', 0)} 篇，跳过 {counts.get('跳过', 0)} 篇。"
     )
+    if analyses:
+        avg_score = sum(a.relevance_score for a in analyses) / len(analyses)
+        document.add_paragraph(f"平均综合分：{avg_score:.1f}/10（已按综合分从高到低排序）")
+    document.add_paragraph(
+        "评分说明：综合分由 ZSL/FSL相关度、方法可迁移性、声学模态匹配度、新颖度/灵感值、"
+        "实验可行性 五项分项分按固定权重加权计算，权重见 paper_triage_config.yaml 的 "
+        "scoring_weights；风险分单独展示，不计入综合分。每篇论文的具体分项分见下方逐篇详细分析。"
+    )
+
     failures = [analysis for analysis in analyses if analysis.error]
     if failures:
         by_category = Counter(analysis.error_category or "未知错误" for analysis in failures)
@@ -109,12 +141,12 @@ def _add_overview(
 
 def _add_quick_table(document: Document, papers: list[EmailPaper], analyses: list[PaperAnalysis]) -> None:
     document.add_heading("快速筛选表", level=1)
-    table = document.add_table(rows=1, cols=6)
+    table = document.add_table(rows=1, cols=7)
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
-    widths = [Cm(9.0), Cm(1.8), Cm(4.0), Cm(2.4), Cm(2.4), Cm(4.5)]
-    headers = ["标题", "评分", "方向", "迁移可行性", "阅读建议", "标签"]
+    widths = [Cm(8.0), Cm(1.6), Cm(3.6), Cm(2.2), Cm(2.0), Cm(1.6), Cm(3.8)]
+    headers = ["标题", "综合分", "方向", "迁移可行性", "阅读建议", "风险", "标签"]
     for index, header in enumerate(headers):
         _set_cell_text(table.rows[0].cells[index], header, bold=True)
         table.rows[0].cells[index].width = widths[index]
@@ -126,24 +158,49 @@ def _add_quick_table(document: Document, papers: list[EmailPaper], analyses: lis
 
     for paper, analysis in zip(papers, analyses):
         row = table.add_row().cells
+        risk_text = f"{analysis.risk_score:g}" if analysis.risk_score >= 7 else "—"
         values = [
-            _shorten(paper.title, 80),
+            _shorten(paper.title, 70),
             f"{analysis.relevance_score:g}",
-            _shorten(analysis.matched_research_direction, 36),
+            _shorten(analysis.matched_research_direction, 32),
             analysis.transfer_feasibility,
             analysis.reading_recommendation,
+            risk_text,
             ", ".join(analysis.keyword_tags),
         ]
         for index, value in enumerate(values):
             cell = row[index]
             cell.width = widths[index]
             cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
-            if index == 3:
+            if index == 1:
+                _set_cell_text(cell, value, bold=True, color=_score_color(analysis.relevance_score))
+            elif index == 3:
                 _set_cell_text(cell, value, bold=True, color=_feasibility_color(value))
             elif index == 4:
                 _set_cell_text(cell, value, bold=True, color=_recommendation_color(value))
+            elif index == 5 and risk_text != "—":
+                _set_cell_text(cell, value, bold=True, color=RGBColor(0xB0, 0x00, 0x20))
             else:
                 _set_cell_text(cell, value)
+
+
+def _add_inspiration_list(document: Document, papers: list[EmailPaper], analyses: list[PaperAnalysis]) -> None:
+    """专门回答"今天这些论文里有没有能借鉴到我 GZSL 课题里的新点子"这个问题。"""
+    document.add_heading("今日灵感清单", level=1)
+    document.add_paragraph("按综合分从高到低，只列出 LLM 认为有具体新颖点的论文（排除「无明显新颖点」）。")
+    selected = [
+        (paper, analysis)
+        for paper, analysis in zip(papers, analyses)
+        if analysis.inspiration_note and analysis.inspiration_note not in ("无明显新颖点", "待人工复核")
+    ]
+    if not selected:
+        document.add_paragraph("今日没有被判定为有明显新颖点的论文。")
+        return
+    for paper, analysis in selected:
+        paragraph = document.add_paragraph(style="List Bullet")
+        run = paragraph.add_run(f"{paper.title}（综合分 {analysis.relevance_score:g}/10）：")
+        run.bold = True
+        paragraph.add_run(analysis.inspiration_note)
 
 
 def _add_details(document: Document, papers: list[EmailPaper], analyses: list[PaperAnalysis]) -> None:
@@ -156,19 +213,30 @@ def _add_details(document: Document, papers: list[EmailPaper], analyses: list[Pa
         document.add_heading(f"{index}. {paper.title}", level=2)
         link_paragraph = document.add_paragraph("arXiv 链接：")
         _add_hyperlink(link_paragraph, paper.arxiv_url, paper.arxiv_url)
-        document.add_paragraph(f"相关性评分：{analysis.relevance_score:g}/10")
+        document.add_paragraph(f"综合分：{analysis.relevance_score:g}/10（{analysis.reading_recommendation}）")
+        document.add_paragraph(f"分项评分：{_format_sub_scores(analysis)}")
+        document.add_paragraph(f"评分依据：{analysis.score_rationale}")
+        document.add_paragraph(f"评分计算过程：{analysis.decision_reason}")
         document.add_paragraph(f"最匹配研究方向：{analysis.matched_research_direction}")
         document.add_paragraph(f"核心贡献：{analysis.core_contribution}")
         document.add_paragraph(f"方法类型：{analysis.method_type}")
         document.add_paragraph(f"技术要素：{_format_flags(analysis.technique_flags)}")
         document.add_paragraph(
             f"是否可迁移到水下目标识别：{'是' if analysis.transferable_to_underwater else '否'}"
+            f"（迁移可行性：{analysis.transfer_feasibility}）"
         )
-        document.add_paragraph(f"迁移可行性：{analysis.transfer_feasibility}")
         document.add_paragraph(f"可以迁移的部分：{analysis.transferable_parts}")
         document.add_paragraph(f"不容易迁移的部分：{analysis.hard_to_transfer_parts}")
         document.add_paragraph(f"DeepShip / ShipsEar 最小实验方案：{analysis.minimal_experiment}")
-        document.add_paragraph(f"推荐阅读建议：{analysis.reading_recommendation}")
+        inspiration_paragraph = document.add_paragraph()
+        inspiration_run = inspiration_paragraph.add_run("给你的灵感：")
+        inspiration_run.bold = True
+        inspiration_paragraph.add_run(analysis.inspiration_note)
+        if analysis.risk_score >= 7:
+            risk_paragraph = document.add_paragraph()
+            risk_run = risk_paragraph.add_run(f"风险提示：risk_score {analysis.risk_score:g}/10 偏高，注意复现/迁移成本。")
+            risk_run.bold = True
+            risk_run.font.color.rgb = RGBColor(0xB0, 0x00, 0x20)
         document.add_paragraph(f"关键词标签：{', '.join(analysis.keyword_tags)}")
         if analysis.error:
             document.add_paragraph(f"自动分析错误类型：{analysis.error_category or '未知错误'}")
@@ -221,6 +289,12 @@ def _add_experiment_ideas(document: Document, papers: list[EmailPaper], analyses
         document.add_paragraph(f"{paper.title}：{analysis.minimal_experiment}", style="List Bullet")
 
 
+def _format_sub_scores(analysis: PaperAnalysis) -> str:
+    parts = [f"{label} {getattr(analysis, field):g}" for field, label in _SUB_SCORE_FIELDS]
+    parts.append(f"风险分 {analysis.risk_score:g}")
+    return "，".join(parts)
+
+
 def _set_cell_text(cell, text: str, bold: bool = False, color: RGBColor | None = None) -> None:
     cell.text = ""
     paragraph = cell.paragraphs[0]
@@ -235,6 +309,14 @@ def _shorten(text: str, limit: int) -> str:
     if len(clean) <= limit:
         return clean
     return clean[: limit - 1].rstrip() + "…"
+
+
+def _score_color(value: float) -> RGBColor:
+    if value >= 8:
+        return RGBColor(0x1B, 0x7F, 0x3A)
+    if value >= 5:
+        return RGBColor(0x9A, 0x67, 0x00)
+    return RGBColor(0x66, 0x66, 0x66)
 
 
 def _feasibility_color(value: str) -> RGBColor:

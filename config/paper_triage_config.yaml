@@ -1,21 +1,45 @@
 research_directions:
-  - 水下目标识别与船舶噪声分类
-  - 被动声纳 / 水声信号处理
-  - DeepShip / ShipsEar
-  - 声谱图、Log-Mel、MFCC、LOFAR、DEMON 特征上的分类
-  - 零样本学习 ZSL / 广义零样本 GZSL
-  - 少样本学习 FSL / 原型学习
-  - 开放集识别 OSR / 未知类拒识 / OOD 检测
-  - 小样本、类别不平衡、跨域迁移、域泛化
+  # 核心方向(评分应重点围绕这些;论文只要命中其中任意一条的核心能力,都应给中高分)
+  - "水下声学目标识别(UATR)与船舶辐射噪声分类,尤其是「能否分类训练时没见过的 unseen 船类」——这是本课题唯一真正关心的核心能力,不管方法叫 ZSL/GZSL/域泛化/元学习/CLIP zero-shot 等什么名字"
+  - "广义零样本学习 GZSL:seen/unseen 类划分 + 语义向量桥接,包含 embedding-based(SAE/DAZLE/GDAN 等)和 generative-based(CADA-VAE/f-CLSWGAN/TF-VAEGAN/FREE 等)两条路线"
+  - "少样本学习 FSL / 原型学习 / 小样本条件下的稳健分类"
+  - "DeepShip / ShipsEar / Oceanship / QiandaoEar22 / DanShip 等水声基准数据集上的实验"
+  - "声谱图、Log-Mel、MFCC、LOFAR、DEMON 特征,以及 PANNs / CLAP / BEATs 等预训练音频 embedding 用于水声分类"
+  - "类别不平衡、长尾分布、跨域迁移、域泛化,尤其是与「未见类别泛化能力」相关的部分"
+  - "类别语义构建:属性向量、文本模板、LLM 生成的声学属性描述、audio-text/CLAP 式对齐"
+
+  # 次要方向(仅作方法论参考,不是当前主线;不要因为论文属于这个方向就直接给高分)
+  - "【暂缓,非主线】开放集识别 OSR / 未知类拒识 / OOD 检测——目前不主动作为检索目标。如果论文的检测器、原型学习、置信度校准机制可能被「顺手」用于 GZSL 里 seen/unseen 的门控环节,可以在 transferable_parts 里提一句作为次要发现,但不要仅因为它是 OSR/OOD 就给出高的 zsl_fsl_score 或整体高分"
 
 judgment_criteria:
-  - 不要只看论文是否出现 underwater / sonar。
-  - 图像分类、医学影像、遥感、故障诊断、音频分类中的零样本、少样本、开放集方法，如果能替换输入模态，也可能迁移。
-  - 如果方法关注类别语义、原型学习、OOD 检测、开放集、少样本分类、跨域适应、域泛化、自监督声学表征，请提高优先级。
-  - 评分必须看是否存在可迁移的技术组件，例如损失函数、原型分类头、未知类阈值、特征对齐策略、语义嵌入或训练/评估协议。
-  - 如果方法强依赖 RGB 图像颜色、目标检测框、像素级分割、大规模标注数据，请降低迁移可行性。
-  - 如果论文主要是 LLM scaling law、数据混合、路由、agent、推理链或纯语言模型训练技巧，且不能落到声学分类实验，请给低分并建议跳过。
-  - 判断是否可以把输入替换为 Log-Mel、MFCC、LOFAR、DEMON 或声谱图。
+  - "【最高优先级】首先判断:这篇论文的方法能不能回答「训练时没见过的类别,能不能被正确分类」。只要能提供这个能力,应给高分,不用管它叫什么名字。"
+  - "不要只看标题/摘要是否出现 underwater / sonar 字样。图像分类、医学影像、遥感、故障诊断、通用音频分类中的零样本/少样本方法,如果能把输入模态换成音频 embedding,同样可能迁移,不要因为「不是水声论文」就打低分。"
+  - "如果方法关注类别语义、属性向量、prototype learning、VAE/GAN 特征生成、metric learning、audio-text 对齐、少样本分类、跨域适应、域泛化、自监督声学表征,应提高 zsl_fsl_score 和 method_transfer_score。"
+  - "如果论文主要是开放集识别 / 未知类拒识 / OOD 检测,且没有「用语义信息对 unseen 类做分类」这一步,只是「拒绝识别」而不是「正确分类」,请在 core_contribution 里明确指出这一点,zsl_fsl_score 不要高于 5,但仍可以在 transferable_parts 里说明其原型学习或校准思路对 GZSL 门控环节是否有参考价值。"
+  - "评分必须看是否存在可迁移的技术组件,例如损失函数设计(如 CADA-VAE 的 CA/DA loss)、原型分类头、语义编码器结构、特征对齐策略、语义嵌入构造方式,或训练/评估协议(如 seen/unseen split、harmonic mean 指标)。这些应体现在 method_transfer_score。"
+  - "如果方法强依赖 RGB 图像颜色、目标检测框、像素级分割、大规模标注数据,且没有明显可以剥离出来的「特征级」组件,应降低 method_transfer_score 并提高 risk_score。"
+  - "如果论文使用 LLM 生成语义属性、文本模板或类别描述(例如用 GPT 给船舶生成声学属性描述),这正是本课题计划采用的方法之一,应提高优先级,不要因为论文用到了 LLM 就误判为「纯语言模型论文」而降分。"
+  - "如果论文主要是 LLM scaling law、数据混合、路由、agent、推理链或纯语言模型训练技巧,且完全不能落到声学分类或类别语义构建实验,给低分并建议跳过。"
+  - "判断是否可以把输入替换为 Log-Mel、MFCC、LOFAR、DEMON、PANNs/CLAP embedding 或声谱图,这应体现在 acoustic_modality_score(论文本身已经是音频/水声任务给高分;通用方法论文即使不是音频任务,只要模态替换路径清晰,也应给中等分,不要打 0 分)。"
+  - "novelty_score 用来回答「这篇论文有没有值得借鉴到你自己 GZSL 课题里的新东西」,例如新的语义构建方式、新的损失函数设计、新的评估协议、新的数据增强思路——这是本课题希望从每日论文里获得的「灵感」来源,请认真对待这一项,并在 inspiration_note 里具体写出来,不要写套话。"
+
+# 综合分由代码按下面的权重从各分项分计算,不直接读 LLM 给的综合分,
+# 避免"LLM 每次口径不一致"的黑盒问题。权重之和应为 1.0,可以自行调整。
+scoring_weights:
+  zsl_fsl_score: 0.35
+  method_transfer_score: 0.25
+  acoustic_modality_score: 0.15
+  novelty_score: 0.15
+  experiment_feasibility_score: 0.10
+
+# risk_score 不参与加权计算,单独作为风险提示展示(0=风险很低,10=风险很高,
+# 例如方法严重依赖大规模标注、复现成本高、依赖已过时环境等)
+
+scoring_anchors:
+  "8-10": "可直接用于设计 DeepShip / ShipsEar 的 GZSL(seen/unseen 划分)实验,或提供了本课题尚未覆盖的语义构建/特征生成新思路"
+  "6-7.9": "方法可迁移,但需要较大改造(更换骨干网络、补充属性标注、从图像级改写为特征级等)"
+  "3-5.9": "概念相关(如都用了 VAE/对比学习/域适应等),但论文本身没有 unseen 类识别或语义桥接的实验设计,实验参考价值弱"
+  "0-2.9": "与水声分类、GZSL/FSL、类别语义构建几乎无关,或是纯 OSR/OOD 拒识且不含 unseen 类分类环节"
 
 gmail:
   query: 'subject:"Daily arXiv"'
@@ -28,7 +52,7 @@ llm:
   generation_kwargs:
     model: ${oc.env:PAPER_TRIAGE_MODEL,gpt-4o-mini}
     temperature: 0.2
-    max_tokens: 2000
+    max_tokens: 2500
 
 report:
   output_dir: reports
