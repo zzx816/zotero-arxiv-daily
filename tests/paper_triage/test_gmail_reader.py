@@ -17,8 +17,15 @@ class FakeMessagesResource:
         self.raw_messages = raw_messages
         self.list_calls = []
 
-    def list(self, userId, q, maxResults):
-        self.list_calls.append({"userId": userId, "q": q, "maxResults": maxResults})
+    def list(self, userId, q, maxResults, includeSpamTrash):
+        self.list_calls.append(
+            {
+                "userId": userId,
+                "q": q,
+                "maxResults": maxResults,
+                "includeSpamTrash": includeSpamTrash,
+            }
+        )
         batch = self.batches.pop(0) if self.batches else []
         return FakeRequest({"messages": [{"id": message_id} for message_id in batch]})
 
@@ -62,7 +69,12 @@ def test_wait_for_message_returns_matching_subject_immediately(monkeypatch):
     assert message.subject == "Daily arXiv 2026/06/08"
     assert sleeps == []
     assert reader._service.messages_resource.list_calls == [
-        {"userId": "me", "q": 'subject:"Daily arXiv"', "maxResults": 10}
+        {
+            "userId": "me",
+            "q": 'subject:"Daily arXiv"',
+            "maxResults": 10,
+            "includeSpamTrash": True,
+        }
     ]
 
 

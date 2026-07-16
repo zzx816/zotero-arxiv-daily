@@ -101,7 +101,7 @@ class GmailReader:
         listing = (
             self._service.users()
             .messages()
-            .list(userId="me", q=query, maxResults=max_results)
+            .list(userId="me", q=query, maxResults=max_results, includeSpamTrash=True)
             .execute()
         )
         messages = listing.get("messages", [])
