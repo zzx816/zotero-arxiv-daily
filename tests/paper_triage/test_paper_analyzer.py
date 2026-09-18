@@ -46,7 +46,10 @@ def test_analyzer_parses_json_response():
         "incremental / continual learning": false,
         "open-set or OOD detection (次要,非主线)": false
       },
-      "zsl_fsl_score": 9,
+      "research_problem_score": 9,
+      "evidence_sufficiency": "高",
+      "protocol_compatibility": "兼容",
+      "concrete_component": true,
       "method_transfer_score": 8,
       "acoustic_modality_score": 6,
       "novelty_score": 8,
@@ -68,11 +71,11 @@ def test_analyzer_parses_json_response():
 
     analysis = analyzer.analyze_one(EmailPaper("A title", "An abstract", "https://arxiv.org/abs/1"))
 
-    assert analysis.relevance_score == 8.0
+    assert analysis.relevance_score == 7.9
     assert analysis.transfer_feasibility == "高"
     assert analysis.reading_recommendation == "精读"
     assert analysis.technique_flags["GZSL"] is True
-    assert analysis.zsl_fsl_score == 9
+    assert analysis.research_problem_score == 9
     assert analysis.method_transfer_score == 8
     assert analysis.inspiration_note == "可以借鉴语义嵌入到特征生成的桥接方式。"
 
@@ -88,7 +91,7 @@ def test_analyzer_falls_back_on_invalid_json():
 
     assert analysis.error is not None
     assert analysis.error_category == "JSON 解析失败"
-    assert analysis.reading_recommendation == "跳过"
+    assert analysis.reading_recommendation == "待核验"
     assert analysis.keyword_tags == ["分析失败", "待复核"]
 
 
@@ -140,3 +143,75 @@ def test_analyzer_classifies_api_errors_and_masks_secrets():
     assert analysis.error_category == "认证失败"
     assert "sk-1234567890abcdef" not in analysis.error
     assert "sk-***" in analysis.error
+
+
+def test_component_scoring_and_evidence_decisions():
+    from paper_triage.paper_analyzer import _analysis_from_dict, DEFAULT_SCORING_WEIGHTS
+    data = dict(research_problem_score=9, method_transfer_score=8,
+                experiment_feasibility_score=7, acoustic_modality_score=5, novelty_score=8,
+                concrete_component=True, evidence_sufficiency="高", protocol_compatibility="兼容",
+                method_type="纯 OOD 门控", research_stage="已见/未见门控")
+    result = _analysis_from_dict(data, DEFAULT_SCORING_WEIGHTS)
+    assert result.relevance_score == 7.8
+    assert result.reading_recommendation == "精读"
+    for override, expected in [
+        ({"evidence_sufficiency": "低"}, "待核验"),
+        ({"evidence_sufficiency": "中"}, "略读"),
+        ({"protocol_compatibility": "待核验"}, "待核验"),
+        ({"protocol_compatibility": "需调整"}, "略读"),
+        ({"protocol_compatibility": "不兼容"}, "跳过"),
+        ({"concrete_component": "false"}, "待核验"),
+    ]:
+        assert _analysis_from_dict(data | override, DEFAULT_SCORING_WEIGHTS).reading_recommendation == expected
+
+
+def test_legacy_score_and_weights_are_mapped():
+    from paper_triage.paper_analyzer import _analysis_from_dict
+    result = _analysis_from_dict({"zsl_fsl_score": 8}, {"zsl_fsl_score": 1})
+    assert result.research_problem_score == 8
+    assert result.relevance_score == 8
+    assert result.reading_recommendation == "待核验"
+
+
+def test_title_only_cannot_receive_confident_recommendation():
+    import json
+    analyzer = PaperAnalyzer(api_key="fake", base_url=None, client=FakeClient(json.dumps({
+        "research_problem_score": 10, "method_transfer_score": 10,
+        "acoustic_modality_score": 10, "novelty_score": 10, "experiment_feasibility_score": 10,
+        "evidence_sufficiency": "高", "protocol_compatibility": "兼容", "concrete_component": True,
+    })))
+    result = analyzer.analyze_one(EmailPaper("OOD", "", "https://arxiv.org/abs/1"))
+    assert result.reading_recommendation == "待核验"
+    assert result.evidence_sufficiency == "低"
+    assert "仅标题" in result.evidence_source
+
+
+def test_low_relevance_with_evidence_is_skipped():
+    from paper_triage.paper_analyzer import _analysis_from_dict, DEFAULT_SCORING_WEIGHTS
+    result = _analysis_from_dict({"research_problem_score": 1, "evidence_sufficiency": "高"}, DEFAULT_SCORING_WEIGHTS)
+    assert result.reading_recommendation == "跳过"
+
+
+def test_config_matches_default_weights_and_has_no_ood_penalty():
+    from pathlib import Path
+    from omegaconf import OmegaConf
+    from paper_triage.paper_analyzer import DEFAULT_SCORING_WEIGHTS
+    config = OmegaConf.load(Path(__file__).parents[2] / "config/paper_triage_config.yaml")
+    assert dict(config.scoring_weights) == DEFAULT_SCORING_WEIGHTS
+    analyzer = PaperAnalyzer(api_key="fake", base_url=None, client=FakeClient(),
+                             research_directions=list(config.research_directions),
+                             judgment_criteria=list(config.judgment_criteria),
+                             scoring_anchors=dict(config.scoring_anchors))
+    prompt = analyzer._build_prompt(EmailPaper("OOD", "abstract", "https://arxiv.org/abs/1"))
+    assert "暂缓" not in prompt
+    assert "每一项分项分都参考这个尺度" not in prompt
+    assert "监督" in prompt and "research_problem_score" in prompt
+
+
+def test_recommendation_boundaries_and_strong_component_exception():
+    from paper_triage.paper_analyzer import _recommendation_from_evidence
+    assert _recommendation_from_evidence(7.5, 8, 8, "高", "兼容", True)[0] == "精读"
+    assert _recommendation_from_evidence(7.4, 8, 8, "高", "兼容", True)[0] == "略读"
+    assert _recommendation_from_evidence(5.5, 6, 6, "中", "兼容", True)[0] == "略读"
+    assert _recommendation_from_evidence(5.4, 6, 6, "中", "兼容", True)[0] == "跳过"
+    assert _recommendation_from_evidence(5.4, 8, 7, "中", "兼容", True)[0] == "略读"

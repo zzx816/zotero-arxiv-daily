@@ -59,3 +59,19 @@ def test_write_report_creates_docx_with_required_sections(tmp_path):
     assert "provider=SiliconFlow" in text
     assert "自动分析错误类型：JSON 解析失败" in text
     assert document.tables[0].cell(1, 0).text.endswith("…")
+
+
+def test_report_includes_evidence_and_pending_list(tmp_path):
+    paper = EmailPaper("OOD gating", "TLDR", "https://arxiv.org/abs/1")
+    analysis = PaperAnalysis(7.8, "GZSL 门控", "动态层选择", "OOD",
+                             research_problem_score=9, reading_recommendation="待核验",
+                             research_stage="已见/未见门控", supervision_requirements="外部 OOD 数据未知",
+                             evidence_gaps="训练监督待核验", inspiration_note="无明显新颖点；只有类比")
+    path = write_report([paper], [analysis], tmp_path)
+    doc = Document(path)
+    text = "\n".join(p.text for p in doc.paragraphs)
+    for expected in ["当前研究问题相关度", "待核验 1 篇", "今日待核验清单", "作用环节：已见/未见门控",
+                     "阅读依据：邮件摘要/TLDR", "监督要求：外部 OOD 数据未知", "协议兼容性：待核验"]:
+        assert expected in text
+    assert "今日没有被判定为有明显新颖点的论文" in text
+    assert "证据低" in doc.tables[0].cell(1, 4).text

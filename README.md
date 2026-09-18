@@ -255,3 +255,21 @@ If you find this project helpful, welcome to sponsor me via WeChat or via [ko-fi
 ## 🌟 Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=TideDra/zotero-arxiv-daily&type=Date)](https://star-history.com/#TideDra/zotero-arxiv-daily&Date)
+
+
+### Word 报告：GZSL 组件价值评分 v2
+
+二次评分配置位于 `config/paper_triage_config.yaml`，与每日初筛的 `CUSTOM_CONFIG` 和 embedding Relevance 分数独立。
+主线为水声船舶 GZSL，同时主动评价 OOD/开集方法对已见与未见门控、偏置校准、未见类原型修正和伪标签筛选的贡献。
+不要求单篇论文独立完成整个 GZSL 流程，也不因出现 OOD 或 zero-shot 就自动加分。
+
+综合分 = 当前研究问题相关度 × 30% + 方法可迁移性 × 30% + 实验可行性与协议兼容性 × 20% + 声学适配程度 × 10% + 可验证的改进启发 × 10%。各分项使用独立评分标准。
+
+报告显示作用环节、阅读依据、证据充分度、证据缺口、监督要求与协议兼容性。当前输入为邮件摘要/TLDR，并未自动读取全文。
+- 精读：综合分至少 7.5，组件明确、证据充分且协议兼容。
+- 略读：综合分至少 5.5 且组件明确；相关度至少 8、迁移性至少 7 的明确局部组件也可进入略读。需调整的转导协议会说明条件。
+- 待核验：证据不足、潜在相关方法的关键协议未知、没有明确组件却给高分，或自动分析失败。仅有标题时始终待核验。
+- 跳过：明确协议不兼容，或证据足够但相关度/迁移价值不足。
+
+这些阈值是起点，应使用已读论文校准，不保证每天有精读论文。分析失败显示未评分，并从平均分中排除。
+旧 `zsl_fsl_score` 配置/模型响应会映射到 `research_problem_score`；新配置和报告使用后者。历史报告不会自动重写。

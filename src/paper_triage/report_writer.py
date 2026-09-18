@@ -16,11 +16,11 @@ from .arxiv_email_parser import EmailPaper
 from .paper_analyzer import PaperAnalysis
 
 _SUB_SCORE_FIELDS = [
-    ("zsl_fsl_score", "ZSL/FSL相关度"),
+    ("research_problem_score", "当前研究问题相关度"),
     ("method_transfer_score", "方法可迁移性"),
-    ("acoustic_modality_score", "声学模态匹配度"),
-    ("novelty_score", "新颖度/灵感值"),
-    ("experiment_feasibility_score", "实验可行性"),
+    ("acoustic_modality_score", "声学适配程度"),
+    ("novelty_score", "可验证的改进启发"),
+    ("experiment_feasibility_score", "实验可行性与协议兼容性"),
 ]
 
 
@@ -41,6 +41,10 @@ def write_report(
     papers, analyses = _sort_by_relevance(papers, analyses)
 
     document = Document()
+    # python-docx 默认模板的 zoom 缺少 OOXML 必需的 percent 属性。
+    zoom = document.settings.element.find(qn("w:zoom"))
+    if zoom is not None and zoom.get(qn("w:percent")) is None:
+        zoom.set(qn("w:percent"), "100")
     _set_default_font(document)
     _set_landscape_layout(document)
     document.add_heading("每日 arXiv 论文迁移可行性分析报告", level=0)
@@ -51,6 +55,7 @@ def write_report(
     _add_details(document, papers, analyses)
     _add_reading_list(document, "今日精读清单", papers, analyses, "精读")
     _add_reading_list(document, "今日略读清单", papers, analyses, "略读")
+    _add_reading_list(document, "今日待核验清单", papers, analyses, "待核验")
     _add_reading_list(document, "今日跳过清单", papers, analyses, "跳过")
     _add_tags(document, analyses)
     _add_experiment_ideas(document, papers, analyses)
@@ -100,16 +105,22 @@ def _add_overview(
     counts = Counter(a.reading_recommendation for a in analyses)
     document.add_paragraph(
         f"阅读建议统计：精读 {counts.get('精读', 0)} 篇，"
-        f"略读 {counts.get('略读', 0)} 篇，跳过 {counts.get('跳过', 0)} 篇。"
+        f"略读 {counts.get('略读', 0)} 篇，待核验 {counts.get('待核验', 0)} 篇，跳过 {counts.get('跳过', 0)} 篇。"
     )
     if analyses:
-        avg_score = sum(a.relevance_score for a in analyses) / len(analyses)
-        document.add_paragraph(f"平均综合分：{avg_score:.1f}/10（已按综合分从高到低排序）")
+        valid = [a for a in analyses if not a.error]
+        if valid:
+            avg_score = sum(a.relevance_score for a in valid) / len(valid)
+            document.add_paragraph(f"有效分析平均综合分：{avg_score:.1f}/10（排除分析失败；摘要评分为初评）")
+        else:
+            document.add_paragraph("有效分析平均综合分：不可用（全部分析失败）")
     document.add_paragraph(
-        "评分说明：综合分由 ZSL/FSL相关度、方法可迁移性、声学模态匹配度、新颖度/灵感值、"
-        "实验可行性 五项分项分按固定权重加权计算，权重见 paper_triage_config.yaml 的 "
+        "评分说明（GZSL 组件价值评分 v2）：综合分由 当前研究问题相关度、方法可迁移性、声学适配程度、可验证的改进启发、"
+        "实验可行性与协议兼容性 五项分项分按固定权重加权计算，权重见 paper_triage_config.yaml 的 "
         "scoring_weights；风险分单独展示，不计入综合分。每篇论文的具体分项分见下方逐篇详细分析。"
     )
+
+    document.add_paragraph("阅读建议：精读需综合分≥7.5、组件明确、证据充分且协议兼容；略读通常需≥5.5及明确组件，强相关局部组件可优先略读。证据不足或协议未知标待核验，协议不兼容标跳过。所有分析基于提供的邮件摘要/TLDR，未读取全文。")
 
     failures = [analysis for analysis in analyses if analysis.error]
     if failures:
@@ -161,10 +172,10 @@ def _add_quick_table(document: Document, papers: list[EmailPaper], analyses: lis
         risk_text = f"{analysis.risk_score:g}" if analysis.risk_score >= 7 else "—"
         values = [
             _shorten(paper.title, 70),
-            f"{analysis.relevance_score:g}",
+            "未评分" if analysis.error else f"{analysis.relevance_score:g}",
             _shorten(analysis.matched_research_direction, 32),
             analysis.transfer_feasibility,
-            analysis.reading_recommendation,
+            f"{analysis.reading_recommendation}（证据{analysis.evidence_sufficiency}）",
             risk_text,
             ", ".join(analysis.keyword_tags),
         ]
@@ -177,7 +188,7 @@ def _add_quick_table(document: Document, papers: list[EmailPaper], analyses: lis
             elif index == 3:
                 _set_cell_text(cell, value, bold=True, color=_feasibility_color(value))
             elif index == 4:
-                _set_cell_text(cell, value, bold=True, color=_recommendation_color(value))
+                _set_cell_text(cell, value, bold=True, color=_recommendation_color(analysis.reading_recommendation))
             elif index == 5 and risk_text != "—":
                 _set_cell_text(cell, value, bold=True, color=RGBColor(0xB0, 0x00, 0x20))
             else:
@@ -191,7 +202,8 @@ def _add_inspiration_list(document: Document, papers: list[EmailPaper], analyses
     selected = [
         (paper, analysis)
         for paper, analysis in zip(papers, analyses)
-        if analysis.inspiration_note and analysis.inspiration_note not in ("无明显新颖点", "待人工复核")
+        if analysis.concrete_component and not analysis.error
+        and analysis.inspiration_note and not analysis.inspiration_note.startswith(("无明显", "待人工复核"))
     ]
     if not selected:
         document.add_paragraph("今日没有被判定为有明显新颖点的论文。")
@@ -213,7 +225,14 @@ def _add_details(document: Document, papers: list[EmailPaper], analyses: list[Pa
         document.add_heading(f"{index}. {paper.title}", level=2)
         link_paragraph = document.add_paragraph("arXiv 链接：")
         _add_hyperlink(link_paragraph, paper.arxiv_url, paper.arxiv_url)
-        document.add_paragraph(f"综合分：{analysis.relevance_score:g}/10（{analysis.reading_recommendation}）")
+        score_text = "未评分" if analysis.error else f"{analysis.relevance_score:g}/10（摘要初评）"
+        document.add_paragraph(f"综合分：{score_text}（{analysis.reading_recommendation}）")
+        document.add_paragraph(f"作用环节：{analysis.research_stage}")
+        document.add_paragraph(f"阅读依据：{analysis.evidence_source}")
+        document.add_paragraph(f"证据充分度：{analysis.evidence_sufficiency}；证据缺口：{analysis.evidence_gaps}")
+        document.add_paragraph(f"监督要求：{analysis.supervision_requirements}")
+        document.add_paragraph(f"协议兼容性：{analysis.protocol_compatibility}；{analysis.protocol_reason}")
+        document.add_paragraph(f"具体可迁移组件：{'已识别' if analysis.concrete_component else '尚未明确'}")
         document.add_paragraph(f"分项评分：{_format_sub_scores(analysis)}")
         document.add_paragraph(f"评分依据：{analysis.score_rationale}")
         document.add_paragraph(f"评分计算过程：{analysis.decision_reason}")
@@ -260,8 +279,9 @@ def _add_reading_list(
         document.add_paragraph("无")
         return
     for paper, analysis in selected:
+        score_text = "未评分" if analysis.error else f"{analysis.relevance_score:g}/10"
         document.add_paragraph(
-            f"{paper.title}（{analysis.relevance_score:g}/10，{analysis.transfer_feasibility}）",
+            f"{paper.title}（{score_text}，{analysis.transfer_feasibility}）",
             style="List Bullet",
         )
 
@@ -312,9 +332,9 @@ def _shorten(text: str, limit: int) -> str:
 
 
 def _score_color(value: float) -> RGBColor:
-    if value >= 8:
+    if value >= 7.5:
         return RGBColor(0x1B, 0x7F, 0x3A)
-    if value >= 5:
+    if value >= 5.5:
         return RGBColor(0x9A, 0x67, 0x00)
     return RGBColor(0x66, 0x66, 0x66)
 

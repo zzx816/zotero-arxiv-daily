@@ -84,7 +84,7 @@ def _build_email_body(analyses: list[PaperAnalysis], report_path: Path, report_d
         f"报告日期：{report_date:%Y-%m-%d}\n"
         f"附件文件：{report_path.name}\n"
         f"阅读建议统计：精读 {counts.get('精读', 0)} 篇，"
-        f"略读 {counts.get('略读', 0)} 篇，跳过 {counts.get('跳过', 0)} 篇。\n"
+        f"略读 {counts.get('略读', 0)} 篇，待核验 {counts.get('待核验', 0)} 篇，跳过 {counts.get('跳过', 0)} 篇。\n"
         f"LLM 分析失败：{failures} 篇。\n\n"
         "完整结果见附件 Word 文档。GitHub Actions 页面也保留了 artifact 备份。"
     )
